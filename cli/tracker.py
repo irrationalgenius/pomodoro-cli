@@ -7,13 +7,11 @@ from pathlib import Path
 
 DB_FILE = Path(__file__).parent / "pomodoro_tracker.db"
 
-
 def get_db():
     conn = sqlite3.connect(DB_FILE)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def log_session(args):
     with get_db() as conn:
@@ -26,14 +24,7 @@ def log_session(args):
         )
         proj = cur.fetchone()
         if not proj:
-            print(
-                f"[!] Error: Project code '{args.code.upper()}' does not exist.",
-                file=sys.stderr,
-            )
-            print(
-                "    Create it first or check available codes with: python tracker.py --projects",
-                file=sys.stderr,
-            )
+            print(f"[!] Error: Project code '{args.code.upper()}' does not exist.", file=sys.stderr)
             sys.exit(1)
 
         project_id = proj["project_id"]
@@ -41,13 +32,10 @@ def log_session(args):
 
         # 2. Validate anchor vs continuation rules
         if args.parent is None and not args.name:
-            print(
-                "[!] Error: A new task (--name) is required when starting an anchor row (no --parent).",
-                file=sys.stderr,
-            )
+            print("[!] Error: A new task (--name) is required when starting an anchor row (no --parent).", file=sys.stderr)
             sys.exit(1)
 
-        # 3. Insert Pomodoro session record
+        # 3. Insert Pomodoro session record with ALL metadata dimensions
         cur.execute(
             """
             INSERT INTO pomodoros (
@@ -57,19 +45,27 @@ def log_session(args):
                 poms_planned,
                 poms_completed,
                 poms_interrupted,
+                pomo_effort,
+                pomo_energy,
+                pomo_interrupt_type,
+                pomo_friction,
                 notes,
                 pomo_complete
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             (
                 project_id,
                 args.parent,
                 args.name if args.parent is None else None,
                 args.plan,
-                args.done,
+                args.completed,
                 args.interrupt,
+                args.effort,
+                args.energy,
+                args.interrupt_type,
+                args.friction,
                 args.notes,
-                1 if args.complete else 0,
+                1 if args.done else 0,
             ),
         )
 
@@ -77,33 +73,45 @@ def log_session(args):
         conn.commit()
 
         # 4. Immediate Terminal Feedback
-        total_mins = args.done * 25
+        total_mins = args.completed * 25
         hours = round(total_mins / 60.0, 2)
+
         print(f"\n[+] Logged Session #{new_id} -> {args.code.upper()} ({project_name})")
         if args.parent:
             print(f"    Linked to Anchor Task #{args.parent}")
         else:
             print(f"    Anchor Task: \"{args.name}\"")
-        print(
-            f"    Stats: {args.done} completed | {args.interrupt} interrupted | {args.plan} planned (~{hours} hrs)"
-        )
-        if args.complete:
-            print("    Status: [✓ MARKED COMPLETE]")
-        print()
 
+        print(f"    Execution: {args.completed} completed | {args.interrupt} interrupted | {args.plan} planned (~{hours} hrs)")
+
+        # Display diagnostic metadata if it deviates from perfect flow
+        diagnostics = []
+        diagnostics.append(f"RPE: E{args.effort}")
+        if args.energy != 'NORMAL':
+            diagnostics.append(f"Energy: {args.energy}")
+        if args.friction != 'FLOW':
+            diagnostics.append(f"Friction: {args.friction}")
+        if args.interrupt > 0 or args.interrupt_type != 'NONE':
+            diagnostics.append(f"Leak: {args.interrupt_type}")
+
+        print(f"    Telemetry: [{', '.join(diagnostics)}]")
+
+        if args.notes:
+            print(f"    AAR Note : {args.notes}")
+        if args.done:
+            print("    Status   : [✓ MARKED COMPLETE]")
+        print()
 
 def show_summary():
     with get_db() as conn:
         cur = conn.cursor()
         query = """
-        SELECT
+        SELECT 
             COALESCE(s.pomo_id_parent, s.pomo_id) AS root_id,
             COALESCE(parent.pomo_name, s.pomo_name) AS deliverable,
             p.project_code,
-            MIN(s.pomo_created) AS first_logged,
-            MAX(s.pomo_created) AS last_logged,
             SUM(s.poms_completed) AS total_completed,
-            SUM(s.poms_interrupted) AS total_interrupted,
+            ROUND(AVG(s.pomo_effort), 1) AS avg_effort,
             MAX(s.pomo_complete) AS is_done,
             ROUND(SUM(s.poms_completed * s.pom_mins) / 60.0, 2) AS focus_hours
         FROM pomodoros s
@@ -118,23 +126,14 @@ def show_summary():
             print("\nNo pomodoro sessions logged yet.\n")
             return
 
-        print("\n" + "=" * 80)
-        print(
-            f"{'ID':<5} {'PROJECT':<12} {'DELIVERABLE':<32} {'POMS':<8} {'HOURS':<8} {'STATUS'}"
-        )
-        print("-" * 80)
+        print("\n" + "=" * 90)
+        print(f"{'ID':<5} {'PROJECT':<12} {'DELIVERABLE':<30} {'POMS':<6} {'HOURS':<7} {'AVG E#':<8} {'STATUS'}")
+        print("-" * 90)
         for r in rows:
             status = "✓ Done" if r["is_done"] else "In Progress"
-            deliv = (
-                (r["deliverable"][:29] + "...")
-                if len(r["deliverable"]) > 32
-                else r["deliverable"]
-            )
-            print(
-                f"#{r['root_id']:<4} {r['project_code']:<12} {deliv:<32} {r['total_completed']:<8} {r['focus_hours']:<8} {status}"
-            )
-        print("=" * 80 + "\n")
-
+            deliv = (r["deliverable"][:27] + "...") if len(r["deliverable"]) > 30 else r["deliverable"]
+            print(f"#{r['root_id']:<4} {r['project_code']:<12} {deliv:<30} {r['total_completed']:<6} {r['focus_hours']:<7} {r['avg_effort']:<8} {status}")
+        print("=" * 90 + "\n")
 
 def list_projects():
     with get_db() as conn:
@@ -158,57 +157,33 @@ def list_projects():
             )
         print("=" * 65 + "\n")
 
-
 def main():
-    parser = argparse.ArgumentParser(
-        description="Lightning Pomodoro CLI Logger for SQLite"
-    )
+    parser = argparse.ArgumentParser(description="Lightning Pomodoro CLI Logger for SQLite")
 
     # Informational flags
-    parser.add_argument(
-        "-s",
-        "--summary",
-        action="store_true",
-        help="Display consolidated task rollup table",
-    )
-    parser.add_argument(
-        "-p", "--projects", action="store_true", help="List active project codes"
-    )
+    parser.add_argument("-s", "--summary", action="store_true", help="Display consolidated task rollup table")
+    parser.add_argument("-p", "--projects", action="store_true", help="List active project codes")
 
-    # Ingestion arguments
+    # Core Execution Arguments
     parser.add_argument("-c", "--code", type=str, help="Project code (e.g., NET-10G)")
-    parser.add_argument(
-        "-n", "--name", type=str, help="Task name (required for anchor row)"
-    )
-    parser.add_argument(
-        "--plan", type=int, default=1, help="Poms planned (circles drawn, default: 1)"
-    )
-    parser.add_argument(
-        "-d",
-        "--done",
-        type=int,
-        default=1,
-        help="Poms completed (dots filled, default: 1)",
-    )
-    parser.add_argument(
-        "-i",
-        "--interrupt",
-        type=int,
-        default=0,
-        help="Poms interrupted (crossed out, default: 0)",
-    )
-    parser.add_argument(
-        "--parent",
-        type=int,
-        default=None,
-        help="Parent task ID if continuing a prior task",
-    )
-    parser.add_argument(
-        "--complete", action="store_true", help="Flag deliverable fully complete"
-    )
-    parser.add_argument(
-        "-m", "--notes", type=str, default=None, help="Brief outcome or blocker note"
-    )
+    parser.add_argument("-n", "--name", type=str, help="Task name (required for anchor row)")
+    parser.add_argument("--parent", type=int, default=None, help="Parent task ID if continuing a prior task")
+    parser.add_argument("--plan", type=int, default=1, help="Poms planned (circles drawn, default: 1)")
+    parser.add_argument("--completed", type=int, default=1, help="Poms completed (dots filled, default: 1)")
+    parser.add_argument("-i", "--interrupt", type=int, default=0, help="Poms interrupted (crossed out, default: 0)")
+    parser.add_argument("-d", "--done", action="store_true", help="Flag deliverable fully complete")
+
+    # Metadata Diagnostic Arguments
+    parser.add_argument("-e", "--effort", type=int, choices=range(1, 6), default=3,
+                        help="Cognitive effort / RPE (1=mechanical, 5=crucible, default: 3)")
+    parser.add_argument("--energy", type=str.upper, choices=['LOW', 'NORMAL', 'PEAK'], default='NORMAL',
+                        help="Biological state going into the block (default: NORMAL)")
+    parser.add_argument("--interrupt-type", type=str.upper, choices=['NONE', 'INTERNAL', 'EXTERNAL'], default='NONE',
+                        help="Source of the disruption (default: NONE)")
+    parser.add_argument("--friction", type=str.upper, choices=['FLOW', 'TOOLING', 'AMBIGUOUS', 'DEPENDENCY'], default='FLOW',
+                        help="Root cause of execution drag (default: FLOW)")
+    parser.add_argument("-m", "--notes", type=str, default=None,
+                        help="Micro-AAR (e.g., 'Friction | Fix or Artifact')")
 
     args = parser.parse_args()
 
@@ -220,7 +195,6 @@ def main():
         log_session(args)
     else:
         parser.print_help()
-
 
 if __name__ == "__main__":
     main()
