@@ -34,13 +34,6 @@ FOR EACH ROW
 BEGIN
     UPDATE projects
     SET
-        project_updated = datetime('now', 'localtime'),
-        project_completed = CASE
-            WHEN NEW.project_status = 'COMPLETED' AND OLD.project_status != 'COMPLETED'
-                THEN datetime('now', 'localtime')
-            WHEN NEW.project_status != 'COMPLETED'
-                THEN NULL
-            ELSE OLD.project_completed
-        END
+        project_updated = datetime('now', 'localtime')
     WHERE project_id = NEW.project_id;
 END;

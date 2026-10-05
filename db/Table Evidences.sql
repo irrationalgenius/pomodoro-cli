@@ -8,7 +8,7 @@ CREATE TABLE evidences (
 
 CREATE TABLE objective_evidences(
     evidence_id REFERENCES evidences(evidence_id) ON DELETE NO ACTION ,
-    objective_id   REFERENCES objective(objective_id) ON DELETE NO ACTION
+    objective_id   REFERENCES objectives(objective_id) ON DELETE NO ACTION
 );
 
 CREATE TABLE project_evidences(

@@ -1,8 +1,9 @@
 
 -- The Operations Layer
+DROP TABLE objectives;
 CREATE TABLE objectives (
     objective_id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    crucible_id            INTEGER UNIQUE REFERENCES crucibles(crucible_id) ON DELETE SET NULL,
+    crucible_id            INTEGER REFERENCES crucibles(crucible_id) ON DELETE SET NULL,
     objective_title        TEXT NOT NULL,
     objective_description  TEXT,
     objective_target_date  TEXT, -- ISO-8601:YYYY-MM-DD HH:MM:SS

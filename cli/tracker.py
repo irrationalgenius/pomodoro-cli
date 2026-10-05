@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DB_FILE = Path(__file__).parent / "pomodoro_tracker.db"
+DB_FILE = Path(__file__).parent / "pomodoros.db"
 
 def get_db():
     conn = sqlite3.connect(DB_FILE)
@@ -43,7 +43,7 @@ def log_session(args):
                 pomo_id_parent,
                 pomo_name,
                 poms_planned,
-                poms_completed,
+                pomo_complete,
                 poms_interrupted,
                 pomo_effort,
                 pomo_energy,
@@ -110,10 +110,10 @@ def show_summary():
             COALESCE(s.pomo_id_parent, s.pomo_id) AS root_id,
             COALESCE(parent.pomo_name, s.pomo_name) AS deliverable,
             p.project_code,
-            SUM(s.poms_completed) AS total_completed,
+            SUM(s.pomo_complete) AS total_completed,
             ROUND(AVG(s.pomo_effort), 1) AS avg_effort,
             MAX(s.pomo_complete) AS is_done,
-            ROUND(SUM(s.poms_completed * s.pom_mins) / 60.0, 2) AS focus_hours
+            ROUND(SUM(s.pomo_complete * s.pom_mins) / 60.0, 2) AS focus_hours
         FROM pomodoros s
         JOIN projects p ON s.project_id = p.project_id
         LEFT JOIN pomodoros parent ON s.pomo_id_parent = parent.pomo_id

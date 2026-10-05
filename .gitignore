@@ -221,4 +221,8 @@ __marimo__/
 
 .idea/
 db/pomodoros.sqlite
+db/Seed.sql
+cli/pomodoros.sqlite
 db/schema.sql
+.vscode/
+RELEASE.txt

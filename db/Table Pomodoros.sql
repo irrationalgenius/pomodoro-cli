@@ -1,8 +1,9 @@
 
+DROP TABLE pomodoros;
 CREATE TABLE pomodoros (
     pomo_id              INTEGER PRIMARY KEY AUTOINCREMENT,
     pomo_id_parent       INTEGER REFERENCES pomodoros(pomo_id) ON DELETE CASCADE,
-    project_id           INTEGER NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+    project_id           INTEGER REFERENCES projects(project_id) ON DELETE CASCADE,
     pomo_created         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     pomo_name            TEXT, -- Permitted NULL on continuation rows
     poms_planned         INTEGER NOT NULL DEFAULT 1,
