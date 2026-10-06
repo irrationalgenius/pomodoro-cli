@@ -3,9 +3,10 @@
 import argparse
 import sqlite3
 import sys
+import textwrap
 from pathlib import Path
 
-DB_FILE = Path(__file__).parents[1] / "db" / "pomodoros.db"
+DB_FILE = Path(__file__).parents[1] / "db" / "pomodoros.sqlite"
 
 def get_db():
     conn = sqlite3.connect(DB_FILE)
@@ -126,14 +127,15 @@ def show_summary():
             print("\nNo pomodoro sessions logged yet.\n")
             return
 
-        print("\n" + "=" * 90)
+        # print("\n" + "=" * 90)
         print(f"{'ID':<5} {'PROJECT':<12} {'DELIVERABLE':<30} {'POMS':<6} {'HOURS':<7} {'AVG E#':<8} {'STATUS'}")
         print("-" * 90)
         for r in rows:
             status = "✓ Done" if r["is_done"] else "In Progress"
             deliv = (r["deliverable"][:27] + "...") if len(r["deliverable"]) > 30 else r["deliverable"]
+            # deliv = textwrap.fill(r["deliverable"], width=30)
             print(f"#{r['root_id']:<4} {r['project_code']:<12} {deliv:<30} {r['total_completed']:<6} {r['focus_hours']:<7} {r['avg_effort']:<8} {status}")
-        print("=" * 90 + "\n")
+        # print("=" * 90 + "\n")
 
 def list_projects():
     with get_db() as conn:
@@ -174,16 +176,11 @@ def main():
     parser.add_argument("-d", "--done", action="store_true", help="Flag deliverable fully complete")
 
     # Metadata Diagnostic Arguments
-    parser.add_argument("-e", "--effort", type=int, choices=range(1, 6), default=3,
-                        help="Cognitive effort / RPE (1=mechanical, 5=crucible, default: 3)")
-    parser.add_argument("--energy", type=str.upper, choices=['LOW', 'NORMAL', 'PEAK'], default='NORMAL',
-                        help="Biological state going into the block (default: NORMAL)")
-    parser.add_argument("--interrupt-type", type=str.upper, choices=['NONE', 'INTERNAL', 'EXTERNAL'], default='NONE',
-                        help="Source of the disruption (default: NONE)")
-    parser.add_argument("--friction", type=str.upper, choices=['FLOW', 'TOOLING', 'AMBIGUOUS', 'DEPENDENCY'], default='FLOW',
-                        help="Root cause of execution drag (default: FLOW)")
-    parser.add_argument("-m", "--notes", type=str, default=None,
-                        help="Micro-AAR (e.g., 'Friction | Fix or Artifact')")
+    parser.add_argument("-e", "--effort", type=int, choices=range(1, 6), default=3, help="Cognitive effort / RPE (1=mechanical, 5=crucible, default: 3)")
+    parser.add_argument("--energy", type=str.upper, choices=['LOW', 'NORMAL', 'PEAK'], default='NORMAL', help="Biological state going into the block (default: NORMAL)")
+    parser.add_argument("--interrupt-type", type=str.upper, choices=['NONE', 'INTERNAL', 'EXTERNAL'], default='NONE', help="Source of the disruption (default: NONE)")
+    parser.add_argument("--friction", type=str.upper, choices=['FLOW', 'TOOLING', 'AMBIGUOUS', 'DEPENDENCY'], default='FLOW', help="Root cause of execution drag (default: FLOW)")
+    parser.add_argument("-m", "--notes", type=str, default=None, help="Micro-AAR (e.g., 'Friction | Fix or Artifact')")
 
     args = parser.parse_args()
 
