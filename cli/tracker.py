@@ -14,6 +14,103 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def list_objectives():
+    with get_db() as conn:
+        cur = conn.cursor()
+        rows = cur.execute(
+            """
+            SELECT objective_id, crucible_id, objective_status, objective_target_date, objective_title
+            FROM objectives
+            ORDER BY objective_status ASC, objective_target_date ASC;
+            """
+        ).fetchall()
+
+        print("\n" + "=" * 80)
+        print(f"{'ID':<5} {'CRUCIBLE':<10} {'STATUS':<12} {'TARGET DATE':<12} {'TITLE'}")
+        print("-" * 80)
+        for r in rows:
+            crucible = r['crucible_id'] if r['crucible_id'] else "None"
+            target = r['objective_target_date'] if r['objective_target_date'] else "None"
+            print(f"#{r['objective_id']:<4} {crucible:<10} {r['objective_status']:<12} {target:<12} {r['objective_title']}")
+        print("=" * 80 + "\n")
+
+def add_objective(args):
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            # Matches the constraints of Table Objectives.sql DDL
+            cur.execute(
+                """
+                INSERT INTO objectives (
+                    crucible_id,
+                    objective_title,
+                    objective_description,
+                    objective_target_date,
+                    objective_status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    args.crucible,
+                    args.obj_title,
+                    args.obj_desc,
+                    args.obj_target,
+                    args.obj_status
+                )
+            )
+            conn.commit()
+            print(f"\n[+] Created Objective #{cur.lastrowid}: {args.obj_title}")
+        except sqlite3.IntegrityError as e:
+            print(f"\n[!] Database Error: {e}")
+            print("    Check if constraints were violated.", file=sys.stderr)
+            sys.exit(1)
+
+def modify_objective(args):
+    updates = []
+    params = []
+
+    if args.obj_title:
+        updates.append("objective_title = ?")
+        params.append(args.obj_title)
+    if args.obj_desc:
+        updates.append("objective_description = ?")
+        params.append(args.obj_desc)
+    if args.obj_target:
+        updates.append("objective_target_date = ?")
+        params.append(args.obj_target)
+    if args.obj_status:
+        updates.append("objective_status = ?")
+        params.append(args.obj_status)
+    if args.crucible is not None:
+        updates.append("crucible_id = ?")
+        params.append(args.crucible)
+
+    if not updates:
+        print("\n[-] Error: No modifications provided. Provide at least one field to update.", file=sys.stderr)
+        sys.exit(1)
+
+    query = f"UPDATE objectives SET {', '.join(updates)} WHERE objective_id = ?"
+    params.append(args.id)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(query, tuple(params))
+        if cur.rowcount == 0:
+            print(f"\n[!] Error: Objective ID #{args.id} not found.", file=sys.stderr)
+        else:
+            conn.commit()
+            print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Objective #{args.id}.")
+
+def delete_objective(args):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM objectives WHERE objective_id = ?", (args.id,))
+        
+        if cur.rowcount == 0:
+            print(f"\n[!] Error: Objective ID #{args.id} not found.", file=sys.stderr)
+        else:
+            conn.commit()
+            print(f"\n[-] Objective #{args.id} permanently deleted.")
+
 def add_session(args):
     with get_db() as conn:
         cur = conn.cursor()
@@ -345,6 +442,19 @@ def main():
     parser.add_argument("-i", "--interrupt", type=int, default=0, help="Poms interrupted (crossed out, default: 0)")
     parser.add_argument("-d", "--done", action="store_true", help="Flag deliverable fully complete")
 
+    # Objective Management Action Flags
+    parser.add_argument("-o", "--objectives", action="store_true", help="List active objectives")
+    parser.add_argument("--add-objective", action="store_true", help="Create a new objective")
+    parser.add_argument("--edit-objective", action="store_true", help="Modify an existing objective")
+    parser.add_argument("--delete-objective", action="store_true", help="Delete an objective")
+
+    # Objective Metadata Arguments
+    parser.add_argument("--obj-title", type=str, help="Title of the objective")
+    parser.add_argument("--obj-desc", type=str, help="Description of the objective")
+    parser.add_argument("--obj-target", type=str, help="Target date for the objective (YYYY-MM-DD)")
+    parser.add_argument("--obj-status", type=str.upper, choices=['ACTIVE', 'COMPLETED', 'ON_HOLD', 'ARCHIVED'], default='ACTIVE', help="Objective lifecycle state (default: ACTIVE)")
+    parser.add_argument("--crucible", type=int, default=None, help="Link to a crucible_id")
+
     # Session Management Action Flags
     parser.add_argument("--edit-session", action="store_true", help="Modify an existing pomodoro session")
     parser.add_argument("--delete-session", action="store_true", help="Delete a pomodoro session")
@@ -400,6 +510,23 @@ def main():
             print("[!] Error: --delete-session requires --id to identify the pomodoro.")
             sys.exit(1)
         delete_session(args)
+    elif args.objectives:
+        list_objectives()
+    elif args.add_objective:
+        if not args.obj_title:
+            print("[!] Error: --add-objective requires --obj-title.")
+            sys.exit(1)
+        add_objective(args)
+    elif args.edit_objective:
+        if not args.id:
+            print("[!] Error: --edit-objective requires --id to identify the objective.")
+            sys.exit(1)
+        modify_objective(args)
+    elif args.delete_objective:
+        if not args.id:
+            print("[!] Error: --delete-objective requires --id to identify the objective.")
+            sys.exit(1)
+        delete_objective(args)
     elif args.code:
         add_session(args)
     else:
