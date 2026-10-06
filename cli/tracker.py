@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DB_FILE = Path(__file__).parent / "pomodoros.db"
+DB_FILE = Path(__file__).parents[1] / "db" / "pomodoros.db"
 
 def get_db():
     conn = sqlite3.connect(DB_FILE)
