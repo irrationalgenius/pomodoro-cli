@@ -14,7 +14,7 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-def log_session(args):
+def add_session(args):
     with get_db() as conn:
         cur = conn.cursor()
 
@@ -52,7 +52,7 @@ def log_session(args):
                 pomo_interrupt_type,
                 pomo_friction,
                 notes,
-                pomo_complete       -- Correctly flags if the task is fully done
+                pomo_complete
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -61,14 +61,14 @@ def log_session(args):
                 args.priority,
                 args.name if args.parent is None else None,
                 args.plan,
-                args.completed,     # Maps to poms_achieved
+                args.completed,
                 args.interrupt,
                 args.effort,
                 args.energy,
                 args.interrupt_type,
                 args.friction,
                 args.notes,
-                1 if args.done else 0, # Maps to pomo_complete
+                1 if args.done else 0,
             ),
         )
 
@@ -87,7 +87,6 @@ def log_session(args):
 
         print(f"    Execution: {args.completed} completed | {args.interrupt} interrupted | {args.plan} planned (~{hours} hrs)")
 
-        # Display diagnostic metadata if it deviates from perfect flow
         diagnostics = []
         diagnostics.append(f"RPE: E{args.effort}")
         if args.energy != 'NORMAL':
@@ -104,6 +103,80 @@ def log_session(args):
         if args.done:
             print("    Status   : [✓ MARKED COMPLETE]")
         print()
+
+def modify_session(args):
+    import sys
+    updates = []
+    params = []
+
+    # Standard text/integer updates
+    if args.name:
+        updates.append("pomo_name = ?")
+        params.append(args.name)
+    if args.code:
+        updates.append("project_id = (SELECT project_id FROM projects WHERE project_code = ?)")
+        params.append(args.code.upper())
+    if args.parent is not None:
+        updates.append("pomo_id_parent = ?")
+        params.append(args.parent)
+    if args.notes:
+        updates.append("notes = ?")
+        params.append(args.notes)
+    if args.done:
+        updates.append("pomo_complete = 1")
+
+    # Metrics & Telemetry: Only update if the flag was explicitly passed in the terminal
+    if '--plan' in sys.argv:
+        updates.append("poms_planned = ?")
+        params.append(args.plan)
+    if '--completed' in sys.argv:
+        updates.append("poms_achieved = ?")
+        params.append(args.completed)
+    if '-i' in sys.argv or '--interrupt' in sys.argv:
+        updates.append("poms_interrupted = ?")
+        params.append(args.interrupt)
+    if '-e' in sys.argv or '--effort' in sys.argv:
+        updates.append("pomo_effort = ?")
+        params.append(args.effort)
+    if '--energy' in sys.argv:
+        updates.append("pomo_energy = ?")
+        params.append(args.energy)
+    if '--friction' in sys.argv:
+        updates.append("pomo_friction = ?")
+        params.append(args.friction)
+    if '--interrupt-type' in sys.argv:
+        updates.append("pomo_interrupt_type = ?")
+        params.append(args.interrupt_type)
+    if '--priority' in sys.argv:
+        updates.append("priority = ?")
+        params.append(args.priority)
+
+    if not updates:
+        print("\n[-] Error: No modifications provided. Specify at least one field to update.", file=sys.stderr)
+        sys.exit(1)
+
+    query = f"UPDATE pomodoros SET {', '.join(updates)} WHERE pomo_id = ?"
+    params.append(args.id)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(query, tuple(params))
+        if cur.rowcount == 0:
+            print(f"\n[!] Error: Pomodoro ID #{args.id} not found.", file=sys.stderr)
+        else:
+            conn.commit()
+            print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Pomodoro #{args.id}.")
+
+def delete_session(args):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM pomodoros WHERE pomo_id = ?", (args.id,))
+        
+        if cur.rowcount == 0:
+            print(f"\n[!] Error: Pomodoro ID #{args.id} not found.", file=sys.stderr)
+        else:
+            conn.commit()
+            print(f"\n[-] Pomodoro #{args.id} permanently deleted.")
 
 def show_summary():
     with get_db() as conn:
@@ -169,6 +242,92 @@ def list_projects():
             )
         print("=" * 65 + "\n")
 
+def add_project(args):
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            # Insert a new project mapping to the Table Projects.sql DDL
+            cur.execute(
+                """
+                INSERT INTO projects (
+                    project_code, 
+                    project_name, 
+                    objective_id, 
+                    project_priority, 
+                    project_status, 
+                    weekly_pom_budget, 
+                    project_contacts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    args.code.upper(),
+                    args.name,
+                    args.objective,
+                    args.proj_priority,
+                    args.status,
+                    args.budget,
+                    args.contacts
+                )
+            )
+            conn.commit()
+            print(f"\n[+] Created Project: {args.code.upper()} -> {args.name}")
+        except sqlite3.IntegrityError as e:
+            print(f"\n[!] Database Error: {e}")
+            print("    Check if the project_code already exists or constraints were violated.", file=sys.stderr)
+            sys.exit(1)
+
+def modify_project(args):
+    # Dynamically build the SQL update statement based only on the arguments provided
+    updates = []
+    params = []
+
+    if args.name:
+        updates.append("project_name = ?")
+        params.append(args.name)
+    if args.objective is not None:
+        updates.append("objective_id = ?")
+        params.append(args.objective)
+    if args.proj_priority:
+        updates.append("project_priority = ?")
+        params.append(args.proj_priority)
+    if args.status:
+        updates.append("project_status = ?")
+        params.append(args.status)
+    if args.budget is not None:
+        updates.append("weekly_pom_budget = ?")
+        params.append(args.budget)
+    if args.contacts:
+        updates.append("project_contacts = ?")
+        params.append(args.contacts)
+
+    if not updates:
+        print("\n[-] Error: No modifications provided. Provide at least one field to update.", file=sys.stderr)
+        sys.exit(1)
+
+    # Append the WHERE clause identifier
+    query = f"UPDATE projects SET {', '.join(updates)} WHERE project_code = ?"
+    params.append(args.code.upper())
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(query, tuple(params))
+        if cur.rowcount == 0:
+            print(f"\n[!] Error: Project code '{args.code.upper()}' not found.", file=sys.stderr)
+        else:
+            conn.commit()
+            print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Project {args.code.upper()}.")
+
+def delete_project(args):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM projects WHERE project_code = ?", (args.code.upper(),))
+        
+        if cur.rowcount == 0:
+            print(f"\n[!] Error: Project code '{args.code.upper()}' not found.", file=sys.stderr)
+        else:
+            conn.commit()
+            print(f"\n[-] Project {args.code.upper()} permanently deleted.")
+
 def main():
     parser = argparse.ArgumentParser(description="Lightning Pomodoro CLI Logger for SQLite")
 
@@ -186,6 +345,23 @@ def main():
     parser.add_argument("-i", "--interrupt", type=int, default=0, help="Poms interrupted (crossed out, default: 0)")
     parser.add_argument("-d", "--done", action="store_true", help="Flag deliverable fully complete")
 
+    # Session Management Action Flags
+    parser.add_argument("--edit-session", action="store_true", help="Modify an existing pomodoro session")
+    parser.add_argument("--delete-session", action="store_true", help="Delete a pomodoro session")
+    parser.add_argument("--id", type=int, help="Target Pomodoro ID (required for edit/delete session)") 
+
+    # Project Management Action Flags
+    parser.add_argument("--add-project", action="store_true", help="Create a new project")
+    parser.add_argument("--edit-project", action="store_true", help="Modify an existing project")
+    parser.add_argument("--delete-project", action="store_true", help="Delete a project")
+
+    # Project Metadata Arguments
+    parser.add_argument("--objective", type=int, default=None, help="Link to an objective_id")
+    parser.add_argument("--proj-priority", type=str.upper, choices=['DO', 'SCHEDULE', 'DELEGATE', 'DELETE'], default='SCHEDULE', help="Eisenhower matrix priority (default: SCHEDULE)")
+    parser.add_argument("--status", type=str.upper, choices=['ACTIVE', 'PAUSED', 'COMPLETED'], default='ACTIVE', help="Project lifecycle state (default: ACTIVE)")
+    parser.add_argument("--budget", type=int, default=0, help="Weekly pomodoro budget (default: 0)")
+    parser.add_argument("--contacts", type=str, default=None, help="Associated project contacts or stakeholders")
+
     # Metadata Diagnostic Arguments
     parser.add_argument("-e", "--effort", type=int, choices=range(1, 6), default=3, help="Cognitive effort / RPE (1=mechanical, 5=crucible, default: 3)")
     parser.add_argument("--energy", type=str.upper, choices=['LOW', 'NORMAL', 'PEAK'], default='NORMAL', help="Biological state going into the block (default: NORMAL)")
@@ -199,8 +375,33 @@ def main():
         show_summary()
     elif args.projects:
         list_projects()
+    elif args.add_project:
+        if not args.code or not args.name:
+            print("[!] Error: --add-project requires both -c (code) and -n (name).")
+            sys.exit(1)
+        add_project(args)
+    elif args.edit_project:
+        if not args.code:
+            print("[!] Error: --edit-project requires -c (code) to identify the project.")
+            sys.exit(1)
+        modify_project(args)
+    elif args.delete_project:
+        if not args.code:
+            print("[!] Error: --delete-project requires -c (code) to identify the project.")
+            sys.exit(1)
+        delete_project(args)
+    elif args.edit_session:
+        if not args.id:
+            print("[!] Error: --edit-session requires --id to identify the pomodoro.")
+            sys.exit(1)
+        modify_session(args)
+    elif args.delete_session:
+        if not args.id:
+            print("[!] Error: --delete-session requires --id to identify the pomodoro.")
+            sys.exit(1)
+        delete_session(args)
     elif args.code:
-        log_session(args)
+        add_session(args)
     else:
         parser.print_help()
 
