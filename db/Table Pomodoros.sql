@@ -4,6 +4,7 @@ CREATE TABLE pomodoros (
     pomo_id              INTEGER PRIMARY KEY AUTOINCREMENT,
     pomo_id_parent       INTEGER REFERENCES pomodoros(pomo_id) ON DELETE CASCADE,
     project_id           INTEGER REFERENCES projects(project_id) ON DELETE CASCADE,
+    priority             INTEGER DEFAULT 4,
     pomo_created         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     pomo_name            TEXT, -- Permitted NULL on continuation rows
     poms_planned         INTEGER NOT NULL DEFAULT 1,
@@ -18,6 +19,7 @@ CREATE TABLE pomodoros (
     pomo_friction        TEXT NOT NULL DEFAULT 'FLOW' 
                          CHECK (pomo_friction IN ('FLOW', 'TOOLING', 'AMBIGUOUS', 'DEPENDENCY')),
     pomo_updated         TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    poms_achieved        INTEGER NOT NULL DEFAULT 0,
     pomo_complete        INTEGER NOT NULL DEFAULT 0 
                          CHECK (pomo_complete IN (0, 1)),
     notes                TEXT, -- Standardized micro-AAR format: [Friction | Fix/Artifact]
@@ -40,7 +42,7 @@ CREATE TRIGGER IF NOT EXISTS trg_pomodoros_updated
 AFTER UPDATE ON pomodoros
 FOR EACH ROW
 BEGIN
-    UPDATE pomodoros 
+    UPDATE pomodoros
     SET pomo_updated = datetime('now', 'localtime') 
     WHERE pomo_id = OLD.pomo_id;
 END;

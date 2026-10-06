@@ -42,31 +42,33 @@ def log_session(args):
             INSERT INTO pomodoros (
                 project_id,
                 pomo_id_parent,
+                priority,
                 pomo_name,
                 poms_planned,
-                pomo_complete,
+                poms_achieved,
                 poms_interrupted,
                 pomo_effort,
                 pomo_energy,
                 pomo_interrupt_type,
                 pomo_friction,
                 notes,
-                pomo_complete
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                pomo_complete       -- Correctly flags if the task is fully done
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
                 args.parent,
+                args.priority,
                 args.name if args.parent is None else None,
                 args.plan,
-                args.completed,
+                args.completed,     # Maps to poms_achieved
                 args.interrupt,
                 args.effort,
                 args.energy,
                 args.interrupt_type,
                 args.friction,
                 args.notes,
-                1 if args.done else 0,
+                1 if args.done else 0, # Maps to pomo_complete
             ),
         )
 
@@ -109,17 +111,18 @@ def show_summary():
         query = """
         SELECT 
             COALESCE(s.pomo_id_parent, s.pomo_id) AS root_id,
+            MIN(s.priority) AS root_priority,
             COALESCE(parent.pomo_name, s.pomo_name) AS deliverable,
             p.project_code,
-            SUM(s.pomo_complete) AS total_completed,
+            SUM(s.poms_achieved) AS total_completed,
             ROUND(AVG(s.pomo_effort), 1) AS avg_effort,
             MAX(s.pomo_complete) AS is_done,
-            ROUND(SUM(s.pomo_complete * s.pom_mins) / 60.0, 2) AS focus_hours
+            ROUND(SUM(s.poms_achieved * s.pom_mins) / 60.0, 2) AS focus_hours
         FROM pomodoros s
         JOIN projects p ON s.project_id = p.project_id
         LEFT JOIN pomodoros parent ON s.pomo_id_parent = parent.pomo_id
         GROUP BY root_id
-        ORDER BY is_done ASC, root_id DESC;
+        ORDER BY is_done ASC, root_priority ASC, root_id DESC;
         """
         rows = cur.execute(query).fetchall()
 
@@ -127,15 +130,22 @@ def show_summary():
             print("\nNo pomodoro sessions logged yet.\n")
             return
 
-        # print("\n" + "=" * 90)
-        print(f"{'ID':<5} {'PROJECT':<12} {'DELIVERABLE':<30} {'POMS':<6} {'HOURS':<7} {'AVG E#':<8} {'STATUS'}")
-        print("-" * 90)
+        print("\n" + "=" * 94)
+        print(f"{'ID':<5} {'PRI':<3} {'PROJECT':<12} {'DELIVERABLE':<30} {'POMS':<6} {'HOURS':<7} {'AVG E#':<8} {'STATUS'}")
+        print("-" * 94)
+        
         for r in rows:
             status = "✓ Done" if r["is_done"] else "In Progress"
-            deliv = (r["deliverable"][:27] + "...") if len(r["deliverable"]) > 30 else r["deliverable"]
-            # deliv = textwrap.fill(r["deliverable"], width=30)
-            print(f"#{r['root_id']:<4} {r['project_code']:<12} {deliv:<30} {r['total_completed']:<6} {r['focus_hours']:<7} {r['avg_effort']:<8} {status}")
-        # print("=" * 90 + "\n")
+            wrapped_deliv = textwrap.wrap(r["deliverable"], width=30) or [""]
+            
+            # Print the main row with the 'P' prefix for the priority integer
+            print(f"#{r['root_id']:<4} P{r['root_priority']:<2} {r['project_code']:<12} {wrapped_deliv[0]:<30} {r['total_completed']:<6} {r['focus_hours']:<7} {r['avg_effort']:<8} {status}")
+            
+            # Print any extra text-wrapped lines with proper blank spacing for ID, PRI, and PROJECT
+            for extra_line in wrapped_deliv[1:]:
+                print(f"{'':<5} {'':<3} {'':<12} {extra_line:<30}")
+                
+        print("=" * 94 + "\n")
 
 def list_projects():
     with get_db() as conn:
@@ -170,6 +180,7 @@ def main():
     parser.add_argument("-c", "--code", type=str, help="Project code (e.g., NET-10G)")
     parser.add_argument("-n", "--name", type=str, help="Task name (required for anchor row)")
     parser.add_argument("--parent", type=int, default=None, help="Parent task ID if continuing a prior task")
+    parser.add_argument("--priority", type=int, choices=[1, 2, 3, 4], default=4, help="Pomodoro priority (1=Highest, 4=Lowest, default: 4)")
     parser.add_argument("--plan", type=int, default=1, help="Poms planned (circles drawn, default: 1)")
     parser.add_argument("--completed", type=int, default=1, help="Poms completed (dots filled, default: 1)")
     parser.add_argument("-i", "--interrupt", type=int, default=0, help="Poms interrupted (crossed out, default: 0)")
