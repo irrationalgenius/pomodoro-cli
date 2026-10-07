@@ -1,0 +1,36 @@
+Flag Quick Reference
+Based on parser definitions:   
+
+-c / --code : The overarching project (e.g., NET-10G)
+-n / --name : Deliverable description
+--parent : ID of the root task (bypasses the need for -n)
+--plan / --completed : Your intended vs. actual Pomodoros
+-i / --interrupt : Number of broken Pomodoros
+-e / --effort : RPE from 1 to 5
+--energy : LOW, NORMAL, or PEAKs
+--friction : FLOW, TOOLING, AMBIGUOUS, or DEPENDENCY
+-m / --notes : Your micro-AAR text
+-d / --done : Flags the pomo_complete boolean to 1
+
+=====
+
+python tracker.py --code NET-10G \
+--name "Configure Omada ER8411 Router" \
+--plan 2 \
+--completed 2
+
+python tracker.py --code NET-10G \
+  --name "Database Migration Script" \
+  --plan 3 \
+  --completed 2 \
+  --interrupt 1 \
+  --effort 4 \
+  --energy PEAK \
+  --friction TOOLING \
+  --notes "Friction | Python syntax error on SQLite insert"
+
+python tracker.py --code NET-10G \
+--parent 42 \
+--completed 1 \ 
+--done \
+--notes "Finished the final VLAN trunking configuration"
