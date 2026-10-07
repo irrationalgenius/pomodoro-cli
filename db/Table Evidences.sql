@@ -1,9 +1,11 @@
 
+DROP TABLE evidences;
 CREATE TABLE evidences (
     evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
     evidence_title TEXT NOT NULL,
     evidence_text  TEXT,
-    evidence_ref   TEXT
+    evidence_location  TEXT,
+    evidence_file   BLOB
 );
 
 CREATE TABLE objective_evidences(
