@@ -128,46 +128,39 @@ def add_session(args):
         project_id = proj["project_id"]
         project_name = proj["project_name"]
 
-        # 2. Validate anchor vs continuation rules
-        if args.parent is None and not args.name:
+        # 2. Validate anchor vs continuation rules & Inherit Priority
+        priority_val = args.priority
+        if args.parent is not None:
+            cur.execute("SELECT priority FROM pomodoros WHERE pomo_id = ?", (args.parent,))
+            parent_row = cur.fetchone()
+            if not parent_row:
+                print(f"[!] Error: Parent task #{args.parent} does not exist.", file=sys.stderr)
+                sys.exit(1)
+            priority_val = parent_row["priority"] # Inherits parent's priority
+        elif not args.name:
             print("[!] Error: A new task (--name) is required when starting an anchor row (no --parent).", file=sys.stderr)
             sys.exit(1)
 
-        # 3. Insert Pomodoro session record with ALL metadata dimensions
-        cur.execute(
-            """
-            INSERT INTO pomodoros (
-                project_id,
-                pomo_id_parent,
-                priority,
-                pomo_name,
-                poms_planned,
-                poms_achieved,
-                poms_interrupted,
-                pomo_effort,
-                pomo_energy,
-                pomo_interrupt_type,
-                pomo_friction,
-                notes,
-                pomo_complete
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                project_id,
-                args.parent,
-                args.priority,
-                args.name if args.parent is None else None,
-                args.plan,
-                args.completed,
-                args.interrupt,
-                args.effort,
-                args.energy,
-                args.interrupt_type,
-                args.friction,
-                args.notes,
-                1 if args.done else 0,
-            ),
-        )
+        # 3. Dynamically Insert Pomodoro session record
+        cols = [
+            "project_id", "pomo_id_parent", "priority", "pomo_name", 
+            "poms_planned", "poms_achieved", "poms_interrupted", "pomo_effort", 
+            "pomo_energy", "pomo_interrupt_type", "pomo_friction", "notes", "pomo_complete"
+        ]
+        vals = [
+            project_id, args.parent, priority_val, args.name if args.parent is None else None,
+            args.plan, args.completed, args.interrupt, args.effort,
+            args.energy, args.interrupt_type, args.friction, args.notes, 1 if args.done else 0
+        ]
+
+        if args.created:
+            cols.append("pomo_created")
+            vals.append(args.created)
+
+        placeholders = ", ".join(["?"] * len(cols))
+        query = f"INSERT INTO pomodoros ({', '.join(cols)}) VALUES ({placeholders})"
+        
+        cur.execute(query, tuple(vals))
 
         new_id = cur.lastrowid
         conn.commit()
@@ -178,7 +171,7 @@ def add_session(args):
 
         print(f"\n[+] Logged Session #{new_id} -> {args.code.upper()} ({project_name})")
         if args.parent:
-            print(f"    Linked to Anchor Task #{args.parent}")
+            print(f"    Linked to Anchor Task #{args.parent} (Inherited Priority {priority_val})")
         else:
             print(f"    Anchor Task: \"{args.name}\"")
 
@@ -221,6 +214,9 @@ def modify_session(args):
         params.append(args.notes)
     if args.done:
         updates.append("pomo_complete = 1")
+    if args.created:
+        updates.append("pomo_created = ?")
+        params.append(args.created)
 
     # Metrics & Telemetry: Only update if the flag was explicitly passed in the terminal
     if '--plan' in sys.argv:
@@ -441,6 +437,7 @@ def main():
     parser.add_argument("--completed", type=int, default=1, help="Poms completed (dots filled, default: 1)")
     parser.add_argument("-i", "--interrupt", type=int, default=0, help="Poms interrupted (crossed out, default: 0)")
     parser.add_argument("-d", "--done", action="store_true", help="Flag deliverable fully complete")
+    parser.add_argument("--created", type=str, help="Custom creation timestamp (YYYY-MM-DD HH:MM:SS)")
 
     # Objective Management Action Flags
     parser.add_argument("-o", "--objectives", action="store_true", help="List active objectives")
