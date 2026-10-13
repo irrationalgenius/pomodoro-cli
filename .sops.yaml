@@ -1,0 +1,3 @@
+creation_rules:
+  - path_regex: cli/.*\.sops\.env$
+    age: "age14c8jdpxj0ct87zul2kpnzzvdax4dtdffjzz495y6gf96xdv48dqsc99a43"

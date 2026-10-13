@@ -220,10 +220,18 @@ __marimo__/
 .streamlit/secrets.toml
 
 .idea/
-db/pomodoros.sqlite
+db/SQLite/pomodoros.sqlite
 db/Seed.sql
 cli/pomodoros.sqlite
-db/schema.sql
+db/SQLite/schema.sql
 .vscode/
 RELEASE.txt
 templating.txt
+NEON.txt
+
+# Ignore all unencrypted environment files
+*.env
+.env
+
+# Explicitly allow SOPS encrypted files
+!*.sops.env

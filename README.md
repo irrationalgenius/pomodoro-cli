@@ -8,3 +8,6 @@ sqlite3 -cmd ".read Deploy.sql" pomodoros.sqlite ".exit"
 sqlite3 db/pomodoros.sqlite ".schema" > db/schema.sql
 sqlite3 db/pomodoros.sqlite ".dump" > db/schema.sql
 python -c "import sqlite3; conn = sqlite3.connect('pomodoros.sqlite'); conn.close()"
+
+Upcoming
+[] - Using PGlite for the local temporary database and then uploading to the centralized PG source.

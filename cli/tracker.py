@@ -1,428 +1,424 @@
 
 #!/usr/bin/env python3
 import argparse
-import sqlite3
+import os
 import sys
 import textwrap
-from pathlib import Path
-
-DB_FILE = Path(__file__).parents[1] / "db" / "pomodoros.sqlite"
+import psycopg
+from psycopg.rows import dict_row
 
 def get_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.row_factory = sqlite3.Row
-    return conn
+    # securely load connection string injected via SOPS/.env
+    conn_str = os.environ.get("DATABASE_URL")
+    if not conn_str:
+        print("[!] Error: DATABASE_URL environment variable is not set.", file=sys.stderr)
+        sys.exit(1)
+    
+    # dict_row provides dictionary-like column access mirroring sqlite3.Row
+    return psycopg.connect(conn_str, row_factory=dict_row)
 
 def list_objectives():
     with get_db() as conn:
-        cur = conn.cursor()
-        rows = cur.execute(
-            """
-            SELECT objective_id, crucible_id, objective_status, objective_target_date, objective_title
-            FROM objectives
-            ORDER BY objective_status ASC, objective_target_date ASC;
-            """
-        ).fetchall()
+        with conn.cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT objective_id, crucible_id, objective_status, objective_target_date, objective_title
+                FROM objectives
+                ORDER BY objective_status ASC, objective_target_date ASC;
+                """
+            ).fetchall()
 
-        print("\n" + "=" * 80)
-        print(f"{'ID':<5} {'CRUCIBLE':<10} {'STATUS':<12} {'TARGET DATE':<12} {'TITLE'}")
-        print("-" * 80)
-        for r in rows:
-            crucible = r['crucible_id'] if r['crucible_id'] else "None"
-            target = r['objective_target_date'] if r['objective_target_date'] else "None"
-            print(f"#{r['objective_id']:<4} {crucible:<10} {r['objective_status']:<12} {target:<12} {r['objective_title']}")
-        print("=" * 80 + "\n")
+            print("\n" + "=" * 80)
+            print(f"{'ID':<5} {'CRUCIBLE':<10} {'STATUS':<12} {'TARGET DATE':<12} {'TITLE'}")
+            print("-" * 80)
+            for r in rows:
+                crucible = r['crucible_id'] if r['crucible_id'] else "None"
+                target = r['objective_target_date'] if r['objective_target_date'] else "None"
+                print(f"#{r['objective_id']:<4} {crucible:<10} {r['objective_status']:<12} {target:<12} {r['objective_title']}")
+            print("=" * 80 + "\n")
 
 def add_objective(args):
     with get_db() as conn:
-        cur = conn.cursor()
-        try:
-            # Matches the constraints of Table Objectives.sql DDL
-            cur.execute(
-                """
-                INSERT INTO objectives (
-                    crucible_id,
-                    objective_title,
-                    objective_description,
-                    objective_target_date,
-                    objective_status
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    args.crucible,
-                    args.obj_title,
-                    args.obj_desc,
-                    args.obj_target,
-                    args.obj_status
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO objectives (
+                        crucible_id,
+                        objective_title,
+                        objective_description,
+                        objective_target_date,
+                        objective_status
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    RETURNING objective_id
+                    """,
+                    (
+                        args.crucible,
+                        args.obj_title,
+                        args.obj_desc,
+                        args.obj_target,
+                        args.obj_status
+                    )
                 )
-            )
-            conn.commit()
-            print(f"\n[+] Created Objective #{cur.lastrowid}: {args.obj_title}")
-        except sqlite3.IntegrityError as e:
-            print(f"\n[!] Database Error: {e}")
-            print("    Check if constraints were violated.", file=sys.stderr)
-            sys.exit(1)
+                new_id = cur.fetchone()["objective_id"]
+                conn.commit()
+                print(f"\n[+] Created Objective #{new_id}: {args.obj_title}")
+            except psycopg.IntegrityError as e:
+                print(f"\n[!] Database Error: {e}")
+                print("    Check if constraints were violated.", file=sys.stderr)
+                sys.exit(1)
 
 def modify_objective(args):
     updates = []
     params = []
 
     if args.obj_title:
-        updates.append("objective_title = ?")
+        updates.append("objective_title = %s")
         params.append(args.obj_title)
     if args.obj_desc:
-        updates.append("objective_description = ?")
+        updates.append("objective_description = %s")
         params.append(args.obj_desc)
     if args.obj_target:
-        updates.append("objective_target_date = ?")
+        updates.append("objective_target_date = %s")
         params.append(args.obj_target)
     if args.obj_status:
-        updates.append("objective_status = ?")
+        updates.append("objective_status = %s")
         params.append(args.obj_status)
     if args.crucible is not None:
-        updates.append("crucible_id = ?")
+        updates.append("crucible_id = %s")
         params.append(args.crucible)
 
     if not updates:
         print("\n[-] Error: No modifications provided. Provide at least one field to update.", file=sys.stderr)
         sys.exit(1)
 
-    query = f"UPDATE objectives SET {', '.join(updates)} WHERE objective_id = ?"
+    query = f"UPDATE objectives SET {', '.join(updates)} WHERE objective_id = %s"
     params.append(args.id)
 
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(query, tuple(params))
-        if cur.rowcount == 0:
-            print(f"\n[!] Error: Objective ID #{args.id} not found.", file=sys.stderr)
-        else:
-            conn.commit()
-            print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Objective #{args.id}.")
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(params))
+            if cur.rowcount == 0:
+                print(f"\n[!] Error: Objective ID #{args.id} not found.", file=sys.stderr)
+            else:
+                conn.commit()
+                print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Objective #{args.id}.")
 
 def delete_objective(args):
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM objectives WHERE objective_id = ?", (args.id,))
-        
-        if cur.rowcount == 0:
-            print(f"\n[!] Error: Objective ID #{args.id} not found.", file=sys.stderr)
-        else:
-            conn.commit()
-            print(f"\n[-] Objective #{args.id} permanently deleted.")
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM objectives WHERE objective_id = %s", (args.id,))
+            
+            if cur.rowcount == 0:
+                print(f"\n[!] Error: Objective ID #{args.id} not found.", file=sys.stderr)
+            else:
+                conn.commit()
+                print(f"\n[-] Objective #{args.id} permanently deleted.")
 
 def add_session(args):
     with get_db() as conn:
-        cur = conn.cursor()
-
-        # 1. Resolve project_code to project_id
-        cur.execute(
-            "SELECT project_id, project_name FROM projects WHERE project_code = ?",
-            (args.code.upper(),),
-        )
-        proj = cur.fetchone()
-        if not proj:
-            print(f"[!] Error: Project code '{args.code.upper()}' does not exist.", file=sys.stderr)
-            sys.exit(1)
-
-        project_id = proj["project_id"]
-        project_name = proj["project_name"]
-
-        # 2. Validate anchor vs continuation rules & Inherit Priority
-        priority_val = args.priority
-        if args.parent is not None:
-            cur.execute("SELECT priority FROM pomodoros WHERE pomo_id = ?", (args.parent,))
-            parent_row = cur.fetchone()
-            if not parent_row:
-                print(f"[!] Error: Parent task #{args.parent} does not exist.", file=sys.stderr)
+        with conn.cursor() as cur:
+            # 1. Resolve project_code to project_id
+            cur.execute(
+                "SELECT project_id, project_name FROM projects WHERE project_code = %s",
+                (args.code.upper(),),
+            )
+            proj = cur.fetchone()
+            if not proj:
+                print(f"[!] Error: Project code '{args.code.upper()}' does not exist.", file=sys.stderr)
                 sys.exit(1)
-            priority_val = parent_row["priority"] # Inherits parent's priority
-        elif not args.name:
-            print("[!] Error: A new task (--name) is required when starting an anchor row (no --parent).", file=sys.stderr)
-            sys.exit(1)
 
-        # 3. Dynamically Insert Pomodoro session record
-        cols = [
-            "project_id", "pomo_id_parent", "priority", "pomo_name", 
-            "poms_planned", "poms_achieved", "poms_interrupted", "pomo_effort", 
-            "pomo_energy", "pomo_interrupt_type", "pomo_friction", "notes", "pomo_complete"
-        ]
-        vals = [
-            project_id, args.parent, priority_val, args.name if args.parent is None else None,
-            args.plan, args.completed, args.interrupt, args.effort,
-            args.energy, args.interrupt_type, args.friction, args.notes, 1 if args.done else 0
-        ]
+            project_id = proj["project_id"]
+            project_name = proj["project_name"]
 
-        if args.created:
-            cols.append("pomo_created")
-            vals.append(args.created)
+            # 2. Validate anchor vs continuation rules & Inherit Priority
+            priority_val = args.priority
+            if args.parent is not None:
+                cur.execute("SELECT priority FROM pomodoros WHERE pomo_id = %s", (args.parent,))
+                parent_row = cur.fetchone()
+                if not parent_row:
+                    print(f"[!] Error: Parent task #{args.parent} does not exist.", file=sys.stderr)
+                    sys.exit(1)
+                priority_val = parent_row["priority"] 
+            elif not args.name:
+                print("[!] Error: A new task (--name) is required when starting an anchor row (no --parent).", file=sys.stderr)
+                sys.exit(1)
 
-        placeholders = ", ".join(["?"] * len(cols))
-        query = f"INSERT INTO pomodoros ({', '.join(cols)}) VALUES ({placeholders})"
-        
-        cur.execute(query, tuple(vals))
+            # 3. Dynamically Insert Pomodoro session record
+            cols = [
+                "project_id", "pomo_id_parent", "priority", "pomo_name", 
+                "poms_planned", "poms_achieved", "poms_interrupted", "pomo_effort", 
+                "pomo_energy", "pomo_interrupt_type", "pomo_friction", "notes", "pomo_complete"
+            ]
+            vals = [
+                project_id, args.parent, priority_val, args.name if args.parent is None else None,
+                args.plan, args.completed, args.interrupt, args.effort,
+                args.energy, args.interrupt_type, args.friction, args.notes, 1 if args.done else 0
+            ]
 
-        new_id = cur.lastrowid
-        conn.commit()
+            if args.created:
+                cols.append("pomo_created")
+                vals.append(args.created)
 
-        # 4. Immediate Terminal Feedback
-        total_mins = args.completed * 25
-        hours = round(total_mins / 60.0, 2)
+            placeholders = ", ".join(["%s"] * len(cols))
+            query = f"INSERT INTO pomodoros ({', '.join(cols)}) VALUES ({placeholders}) RETURNING pomo_id"
+            
+            cur.execute(query, tuple(vals))
 
-        print(f"\n[+] Logged Session #{new_id} -> {args.code.upper()} ({project_name})")
-        if args.parent:
-            print(f"    Linked to Anchor Task #{args.parent} (Inherited Priority {priority_val})")
-        else:
-            print(f"    Anchor Task: \"{args.name}\"")
+            new_id = cur.fetchone()["pomo_id"]
+            conn.commit()
 
-        print(f"    Execution: {args.completed} completed | {args.interrupt} interrupted | {args.plan} planned (~{hours} hrs)")
+            # 4. Immediate Terminal Feedback
+            total_mins = args.completed * 25
+            hours = round(total_mins / 60.0, 2)
 
-        diagnostics = []
-        diagnostics.append(f"RPE: E{args.effort}")
-        if args.energy != 'NORMAL':
-            diagnostics.append(f"Energy: {args.energy}")
-        if args.friction != 'FLOW':
-            diagnostics.append(f"Friction: {args.friction}")
-        if args.interrupt > 0 or args.interrupt_type != 'NONE':
-            diagnostics.append(f"Leak: {args.interrupt_type}")
+            print(f"\n[+] Logged Session #{new_id} -> {args.code.upper()} ({project_name})")
+            if args.parent:
+                print(f"    Linked to Anchor Task #{args.parent} (Inherited Priority {priority_val})")
+            else:
+                print(f"    Anchor Task: \"{args.name}\"")
 
-        print(f"    Telemetry: [{', '.join(diagnostics)}]")
+            print(f"    Execution: {args.completed} completed | {args.interrupt} interrupted | {args.plan} planned (~{hours} hrs)")
 
-        if args.notes:
-            print(f"    AAR Note : {args.notes}")
-        if args.done:
-            print("    Status   : [✓ MARKED COMPLETE]")
-        print()
+            diagnostics = []
+            diagnostics.append(f"RPE: E{args.effort}")
+            if args.energy != 'NORMAL':
+                diagnostics.append(f"Energy: {args.energy}")
+            if args.friction != 'FLOW':
+                diagnostics.append(f"Friction: {args.friction}")
+            if args.interrupt > 0 or args.interrupt_type != 'NONE':
+                diagnostics.append(f"Leak: {args.interrupt_type}")
+
+            print(f"    Telemetry: [{', '.join(diagnostics)}]")
+
+            if args.notes:
+                print(f"    AAR Note : {args.notes}")
+            if args.done:
+                print("    Status   : [✓ MARKED COMPLETE]")
+            print()
 
 def modify_session(args):
     import sys
     updates = []
     params = []
 
-    # Standard text/integer updates
     if args.name:
-        updates.append("pomo_name = ?")
+        updates.append("pomo_name = %s")
         params.append(args.name)
     if args.code:
-        updates.append("project_id = (SELECT project_id FROM projects WHERE project_code = ?)")
+        updates.append("project_id = (SELECT project_id FROM projects WHERE project_code = %s)")
         params.append(args.code.upper())
     if args.parent is not None:
-        updates.append("pomo_id_parent = ?")
+        updates.append("pomo_id_parent = %s")
         params.append(args.parent)
     if args.notes:
-        updates.append("notes = ?")
+        updates.append("notes = %s")
         params.append(args.notes)
     if args.done:
         updates.append("pomo_complete = 1")
     if args.created:
-        updates.append("pomo_created = ?")
+        updates.append("pomo_created = %s")
         params.append(args.created)
 
-    # Metrics & Telemetry: Only update if the flag was explicitly passed in the terminal
     if '--plan' in sys.argv:
-        updates.append("poms_planned = ?")
+        updates.append("poms_planned = %s")
         params.append(args.plan)
     if '--completed' in sys.argv:
-        updates.append("poms_achieved = ?")
+        updates.append("poms_achieved = %s")
         params.append(args.completed)
     if '-i' in sys.argv or '--interrupt' in sys.argv:
-        updates.append("poms_interrupted = ?")
+        updates.append("poms_interrupted = %s")
         params.append(args.interrupt)
     if '-e' in sys.argv or '--effort' in sys.argv:
-        updates.append("pomo_effort = ?")
+        updates.append("pomo_effort = %s")
         params.append(args.effort)
     if '--energy' in sys.argv:
-        updates.append("pomo_energy = ?")
+        updates.append("pomo_energy = %s")
         params.append(args.energy)
     if '--friction' in sys.argv:
-        updates.append("pomo_friction = ?")
+        updates.append("pomo_friction = %s")
         params.append(args.friction)
     if '--interrupt-type' in sys.argv:
-        updates.append("pomo_interrupt_type = ?")
+        updates.append("pomo_interrupt_type = %s")
         params.append(args.interrupt_type)
     if '--priority' in sys.argv:
-        updates.append("priority = ?")
+        updates.append("priority = %s")
         params.append(args.priority)
 
     if not updates:
         print("\n[-] Error: No modifications provided. Specify at least one field to update.", file=sys.stderr)
         sys.exit(1)
 
-    query = f"UPDATE pomodoros SET {', '.join(updates)} WHERE pomo_id = ?"
+    query = f"UPDATE pomodoros SET {', '.join(updates)} WHERE pomo_id = %s"
     params.append(args.id)
 
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(query, tuple(params))
-        if cur.rowcount == 0:
-            print(f"\n[!] Error: Pomodoro ID #{args.id} not found.", file=sys.stderr)
-        else:
-            conn.commit()
-            print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Pomodoro #{args.id}.")
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(params))
+            if cur.rowcount == 0:
+                print(f"\n[!] Error: Pomodoro ID #{args.id} not found.", file=sys.stderr)
+            else:
+                conn.commit()
+                print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Pomodoro #{args.id}.")
 
 def delete_session(args):
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM pomodoros WHERE pomo_id = ?", (args.id,))
-        
-        if cur.rowcount == 0:
-            print(f"\n[!] Error: Pomodoro ID #{args.id} not found.", file=sys.stderr)
-        else:
-            conn.commit()
-            print(f"\n[-] Pomodoro #{args.id} permanently deleted.")
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pomodoros WHERE pomo_id = %s", (args.id,))
+            
+            if cur.rowcount == 0:
+                print(f"\n[!] Error: Pomodoro ID #{args.id} not found.", file=sys.stderr)
+            else:
+                conn.commit()
+                print(f"\n[-] Pomodoro #{args.id} permanently deleted.")
 
 def show_summary():
     with get_db() as conn:
-        cur = conn.cursor()
-        query = """
-        SELECT 
-            COALESCE(s.pomo_id_parent, s.pomo_id) AS root_id,
-            MIN(s.priority) AS root_priority,
-            COALESCE(parent.pomo_name, s.pomo_name) AS deliverable,
-            p.project_code,
-            SUM(s.poms_achieved) AS total_completed,
-            ROUND(AVG(s.pomo_effort), 1) AS avg_effort,
-            MAX(s.pomo_complete) AS is_done,
-            ROUND(SUM(s.poms_achieved * s.pom_mins) / 60.0, 2) AS focus_hours
-        FROM pomodoros s
-        JOIN projects p ON s.project_id = p.project_id
-        LEFT JOIN pomodoros parent ON s.pomo_id_parent = parent.pomo_id
-        GROUP BY root_id
-        ORDER BY is_done ASC, root_priority ASC, root_id DESC;
-        """
-        rows = cur.execute(query).fetchall()
+        with conn.cursor() as cur:
+            query = """
+            SELECT 
+                COALESCE(s.pomo_id_parent, s.pomo_id) AS root_id,
+                MIN(s.priority) AS root_priority,
+                COALESCE(parent.pomo_name, s.pomo_name) AS deliverable,
+                p.project_code,
+                SUM(s.poms_achieved) AS total_completed,
+                ROUND(AVG(s.pomo_effort), 1) AS avg_effort,
+                MAX(s.pomo_complete) AS is_done,
+                ROUND(SUM(s.poms_achieved * s.pom_mins) / 60.0, 2) AS focus_hours
+            FROM pomodoros s
+            JOIN projects p ON s.project_id = p.project_id
+            LEFT JOIN pomodoros parent ON s.pomo_id_parent = parent.pomo_id
+            GROUP BY root_id, parent.pomo_name, s.pomo_name, p.project_code
+            ORDER BY MAX(s.pomo_complete) ASC, MIN(s.priority) ASC, COALESCE(s.pomo_id_parent, s.pomo_id) DESC;
+            """
+            rows = cur.execute(query).fetchall()
 
-        if not rows:
-            print("\nNo pomodoro sessions logged yet.\n")
-            return
+            if not rows:
+                print("\nNo pomodoro sessions logged yet.\n")
+                return
 
-        print("\n" + "=" * 94)
-        print(f"{'ID':<5} {'PRI':<3} {'PROJECT':<12} {'DELIVERABLE':<30} {'POMS':<6} {'HOURS':<7} {'AVG E#':<8} {'STATUS'}")
-        print("-" * 94)
-        
-        for r in rows:
-            status = "✓ Done" if r["is_done"] else "In Progress"
-            wrapped_deliv = textwrap.wrap(r["deliverable"], width=30) or [""]
+            print("\n" + "=" * 94)
+            print(f"{'ID':<5} {'PRI':<3} {'PROJECT':<12} {'DELIVERABLE':<30} {'POMS':<6} {'HOURS':<7} {'AVG E#':<8} {'STATUS'}")
+            print("-" * 94)
             
-            # Print the main row with the 'P' prefix for the priority integer
-            print(f"#{r['root_id']:<4} P{r['root_priority']:<2} {r['project_code']:<12} {wrapped_deliv[0]:<30} {r['total_completed']:<6} {r['focus_hours']:<7} {r['avg_effort']:<8} {status}")
-            
-            # Print any extra text-wrapped lines with proper blank spacing for ID, PRI, and PROJECT
-            for extra_line in wrapped_deliv[1:]:
-                print(f"{'':<5} {'':<3} {'':<12} {extra_line:<30}")
+            for r in rows:
+                status = "✓ Done" if r["is_done"] else "In Progress"
+                wrapped_deliv = textwrap.wrap(r["deliverable"], width=30) or [""]
                 
-        print("=" * 94 + "\n")
+                print(f"#{r['root_id']:<4} P{r['root_priority']:<2} {r['project_code']:<12} {wrapped_deliv[0]:<30} {r['total_completed']:<6} {r['focus_hours']:<7} {r['avg_effort']:<8} {status}")
+                
+                for extra_line in wrapped_deliv[1:]:
+                    print(f"{'':<5} {'':<3} {'':<12} {extra_line:<30}")
+                    
+            print("=" * 94 + "\n")
 
 def list_projects():
     with get_db() as conn:
-        cur = conn.cursor()
-        rows = cur.execute(
+        with conn.cursor() as cur:
+            rows = cur.execute(
+                """
+                SELECT project_code, project_name, project_priority, project_status, weekly_pom_budget
+                FROM projects
+                ORDER BY project_status, project_priority;
             """
-            SELECT project_code, project_name, project_priority, project_status, weekly_pom_budget
-            FROM projects
-            ORDER BY project_status, project_priority;
-        """
-        ).fetchall()
+            ).fetchall()
 
-        print("\n" + "=" * 65)
-        print(
-            f"{'CODE':<12} {'PRIORITY':<10} {'STATUS':<10} {'BUDGET':<8} {'NAME'}"
-        )
-        print("-" * 65)
-        for r in rows:
+            print("\n" + "=" * 65)
             print(
-                f"{r['project_code']:<12} {r['project_priority']:<10} {r['project_status']:<10} {r['weekly_pom_budget']:<8} {r['project_name']}"
+                f"{'CODE':<12} {'PRIORITY':<10} {'STATUS':<10} {'BUDGET':<8} {'NAME'}"
             )
-        print("=" * 65 + "\n")
+            print("-" * 65)
+            for r in rows:
+                print(
+                    f"{r['project_code']:<12} {r['project_priority']:<10} {r['project_status']:<10} {r['weekly_pom_budget']:<8} {r['project_name']}"
+                )
+            print("=" * 65 + "\n")
 
 def add_project(args):
     with get_db() as conn:
-        cur = conn.cursor()
-        try:
-            # Insert a new project mapping to the Table Projects.sql DDL
-            cur.execute(
-                """
-                INSERT INTO projects (
-                    project_code, 
-                    project_name, 
-                    objective_id, 
-                    project_priority, 
-                    project_status, 
-                    weekly_pom_budget, 
-                    project_contacts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    args.code.upper(),
-                    args.name,
-                    args.objective,
-                    args.proj_priority,
-                    args.status,
-                    args.budget,
-                    args.contacts
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO projects (
+                        project_code, 
+                        project_name, 
+                        objective_id, 
+                        project_priority, 
+                        project_status, 
+                        weekly_pom_budget, 
+                        project_contacts
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        args.code.upper(),
+                        args.name,
+                        args.objective,
+                        args.proj_priority,
+                        args.status,
+                        args.budget,
+                        args.contacts
+                    )
                 )
-            )
-            conn.commit()
-            print(f"\n[+] Created Project: {args.code.upper()} -> {args.name}")
-        except sqlite3.IntegrityError as e:
-            print(f"\n[!] Database Error: {e}")
-            print("    Check if the project_code already exists or constraints were violated.", file=sys.stderr)
-            sys.exit(1)
+                conn.commit()
+                print(f"\n[+] Created Project: {args.code.upper()} -> {args.name}")
+            except psycopg.IntegrityError as e:
+                print(f"\n[!] Database Error: {e}")
+                print("    Check if the project_code already exists or constraints were violated.", file=sys.stderr)
+                sys.exit(1)
 
 def modify_project(args):
-    # Dynamically build the SQL update statement based only on the arguments provided
     updates = []
     params = []
 
     if args.name:
-        updates.append("project_name = ?")
+        updates.append("project_name = %s")
         params.append(args.name)
     if args.objective is not None:
-        updates.append("objective_id = ?")
+        updates.append("objective_id = %s")
         params.append(args.objective)
     if args.proj_priority:
-        updates.append("project_priority = ?")
+        updates.append("project_priority = %s")
         params.append(args.proj_priority)
     if args.status:
-        updates.append("project_status = ?")
+        updates.append("project_status = %s")
         params.append(args.status)
     if args.budget is not None:
-        updates.append("weekly_pom_budget = ?")
+        updates.append("weekly_pom_budget = %s")
         params.append(args.budget)
     if args.contacts:
-        updates.append("project_contacts = ?")
+        updates.append("project_contacts = %s")
         params.append(args.contacts)
 
     if not updates:
         print("\n[-] Error: No modifications provided. Provide at least one field to update.", file=sys.stderr)
         sys.exit(1)
 
-    # Append the WHERE clause identifier
-    query = f"UPDATE projects SET {', '.join(updates)} WHERE project_code = ?"
+    query = f"UPDATE projects SET {', '.join(updates)} WHERE project_code = %s"
     params.append(args.code.upper())
 
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(query, tuple(params))
-        if cur.rowcount == 0:
-            print(f"\n[!] Error: Project code '{args.code.upper()}' not found.", file=sys.stderr)
-        else:
-            conn.commit()
-            print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Project {args.code.upper()}.")
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(params))
+            if cur.rowcount == 0:
+                print(f"\n[!] Error: Project code '{args.code.upper()}' not found.", file=sys.stderr)
+            else:
+                conn.commit()
+                print(f"\n[+] Successfully updated {cur.rowcount} column(s) for Project {args.code.upper()}.")
 
 def delete_project(args):
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM projects WHERE project_code = ?", (args.code.upper(),))
-        
-        if cur.rowcount == 0:
-            print(f"\n[!] Error: Project code '{args.code.upper()}' not found.", file=sys.stderr)
-        else:
-            conn.commit()
-            print(f"\n[-] Project {args.code.upper()} permanently deleted.")
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM projects WHERE project_code = %s", (args.code.upper(),))
+            
+            if cur.rowcount == 0:
+                print(f"\n[!] Error: Project code '{args.code.upper()}' not found.", file=sys.stderr)
+            else:
+                conn.commit()
+                print(f"\n[-] Project {args.code.upper()} permanently deleted.")
 
 def main():
-    parser = argparse.ArgumentParser(description="Lightning Pomodoro CLI Logger for SQLite")
+    parser = argparse.ArgumentParser(description="Lightning Pomodoro CLI Logger for PostgreSQL")
 
     # Informational flags
     parser.add_argument("-s", "--summary", action="store_true", help="Display consolidated task rollup table")
