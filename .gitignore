@@ -245,3 +245,5 @@ age-keygen.exe
 
 # Explicitly allow SOPS encrypted files
 !*.sops.env
+
+Pomodoro.code-workspace
