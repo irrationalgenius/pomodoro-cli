@@ -8,6 +8,7 @@ WITH ac AS(SELECT COALESCE(pomo_id_parent, pomo_id) AS root_id
 SELECT p.pomo_id,
        p.pomo_id_parent,
        COALESCE(p.pomo_id_parent, p.pomo_id) AS grouping_id,
+       pj.project_name,
        p.pomo_created,
        p.priority,
        p.pomo_name,
@@ -15,6 +16,7 @@ SELECT p.pomo_id,
        p.notes
 FROM pomodoros p
   INNER JOIN ac ON COALESCE(p.pomo_id_parent, p.pomo_id) = ac.root_id
+  LEFT JOIN projects pj ON pj.project_id = p.project_id
 ORDER BY grouping_id,
          CASE
            WHEN p.pomo_id_parent IS NULL THEN 0

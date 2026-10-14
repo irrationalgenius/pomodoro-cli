@@ -228,6 +228,16 @@ db/SQLite/schema.sql
 RELEASE.txt
 templating.txt
 NEON.txt
+DEV.md
+db/archive/
+
+# Workaround libs for remote exec
+## https://github.com/getsops/sops/releases
+sops.exe
+
+## https://github.com/FiloSottile/age/releases
+age.exe 
+age-keygen.exe
 
 # Ignore all unencrypted environment files
 *.env
